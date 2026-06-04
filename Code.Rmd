@@ -1,0 +1,434 @@
+---
+title: "Final Project"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+# Predict the average reaction time through the variables we get from the survey
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, waring = FALSE, message = FALSE)
+```
+
+```{r}
+library(leaps)
+library(olsrr)
+library(tidyverse)
+library(ggplot2)
+library(glmnet)
+library(lmtest)
+library(nlme)
+library(car)
+set.seed(123)
+```
+
+```{r}
+# Read in the data
+Survey <- read.csv("Survey.csv")
+names(Survey)
+```
+
+```{r}
+# Data Cleaning: IQR Outliers
+## Define function
+remove_outliers_iqr <- function(df, columns) {
+  for (col in columns) {
+    Q1 <- quantile(df[[col]], 0.25, na.rm = TRUE)
+    Q3 <- quantile(df[[col]], 0.75, na.rm = TRUE)
+    IQR_value <- Q3 - Q1
+    lower_bound <- Q1 - 1.5 * IQR_value
+    upper_bound <- Q3 + 1.5 * IQR_value
+    df <- df[df[[col]] >= lower_bound & df[[col]] <= upper_bound, ]
+  }
+  return(df)
+}
+```
+
+```{r}
+# Create response Y --  mean reaction time of three tests
+survey <- Survey
+survey$avg_time <- rowMeans(Survey[, c("First", "Second", "Third")])
+
+## New data frame with no outliers
+survey_cleaned <- remove_outliers_iqr(survey, c("avg_time",  "AvgSleepTime", "LastNightSleep", "HoursAweak", "AvgHoursExercise"))
+
+## Remove not informative column
+survey_cleaned <- survey_cleaned %>%
+  dplyr::select(-AlcoholIntake)
+```
+
+```{r}
+# Factorize --> levels
+survey_cleaned <- survey_cleaned %>%
+  mutate(
+    Fatigue = factor(Fatigue, levels = c("Extremely fatigued", "Very fatigued", "Moderately fatigued", "Slightly Fatigued", "Not fatigued at all")),
+    Stress = factor(Stress, levels = c("Very High", "High", "Moderate", "Low", "Very Low")),
+    Cautious = factor(Cautious, levels = c("Extremely cautious", "Very cautious", "Moderately cautious", "Slightly cautious", "Not cautious at all")),
+    WiFi = factor(WiFi, levels = c("Unstable", "Stable")),
+    RefreshRate = factor(RefreshRate, levels = c("High", "Mid-Range", "Standard")),
+    InputDevice = factor(InputDevice, levels = c("Game controller", "Mouse", "Keyboard", "Trackpad", "Touch screen")),
+    UsePrimaryHand = factor(UsePrimaryHand, levels = c("Yes", "No")),
+    PrimarilyHand = factor(PrimarilyHand, levels = c("Right hand", "Left hand", "Ambidextrous (both hands equally)")),
+    VideoGamePlay = factor(VideoGamePlay, levels = c("Daily", "Several times a week", "Once a week", "Several times a month", "Rarely", "Never")),
+    SportsPlay = factor(SportsPlay, levels = c("Daily", "Several times a week", "Once a week", "Several times a month", "Rarely", "Never")),
+    ShootingGames = factor(ShootingGames, levels = c("None", "Beginner", "Intermediate", "Advanced", "Expert")),
+    Temperature = factor(Temperature, levels = c("Very Warm", "Warm", "Neutral", "Cold")),
+    Class = factor(Class, levels = c("Sophomore", "Junior", "Senior", "Graduate student"))
+  )
+```
+
+
+```{r}
+# Exploratory Data Analysis
+## Continuous variables summary
+summary(survey_cleaned)
+
+## Boxplot function
+plot_box <- function(var) {
+  survey_cleaned %>%
+    ggplot(aes_string(x = var, y = "avg_time")) +
+    geom_boxplot() +
+    stat_summary(geom = "point", fun = "mean", color = "red") +
+    labs(title = paste("avg_time vs", var)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+## avg_time vs Class
+plot_box("Class")
+
+## avg_time vs Fatigue
+plot_box("Fatigue")
+
+## avg_time vs Stress
+plot_box("Stress")
+
+## avg_time vs Distraction
+plot_box("Distraction")
+
+## avg_time vs Temperature
+plot_box("Temperature")
+
+## avg_time vs ShootingGames
+plot_box("ShootingGames")
+
+## avg_time vs VideoGamePlay
+plot_box("VideoGamePlay")
+
+## avg_time vs SportsPlay
+plot_box("SportsPlay")
+
+## avg_time vs Gamer
+plot_box("Gamer")
+
+## avg_time vs CaffeinIntake
+plot_box("CaffeinIntake")
+
+## avg_time vs VisualAcuity
+plot_box("VisualAcuity")
+
+## avg_time vs WiFi
+plot_box("WiFi")
+
+## avg_time vs DeviceOS
+plot_box("DeviceOS")
+
+## avg_time vs RefreshRate
+plot_box("RefreshRate")
+
+## avg_time vs InputDevice
+plot_box("InputDevice")
+
+## avg_time vs Cautious
+plot_box("Cautious")
+
+## avg_time vs UsePrimaryHand
+plot_box("UsePrimaryHand")
+
+## avg_time vs PrimarilyHand
+plot_box("PrimarilyHand")
+
+## Continuous variables histogram
+plot_hist <- function(var, bins = 30) {
+  survey_cleaned %>%
+    ggplot(aes(x = {{ var }})) +
+    geom_histogram(fill = "skyblue", color = "black", bins = bins) +
+    labs(title = paste("Histogram of", deparse(substitute(var))),
+         x = deparse(substitute(var)), y = "Count") +
+    theme_bw()
+}
+
+## Age
+plot_hist(Age)
+
+## AvgSleepTime
+plot_hist(AvgSleepTime)
+
+## HoursAweak
+plot_hist(HoursAweak)
+
+## NoiseLevel
+plot_hist(NoiseLevel)
+
+## AvgHoursExercise
+plot_hist(AvgHoursExercise)
+```
+
+```{r}
+# Pre-processing
+Survey_cleaned <- survey_cleaned
+## Combine 5 fatigue levels to 3 levels
+Survey_cleaned <- Survey_cleaned %>%
+  mutate(Fatigue_3 = case_when(
+    Fatigue %in% c("Extremely fatigued", "Very fatigued") ~ "High Fatigue",
+    Fatigue %in% c("Moderately fatigued") ~ "Moderately Fatigue",
+    Fatigue %in% c("Not fatigued at all", "Slightly Fatigued") ~ "Low Fatigue"),
+    Fatigue_3 = factor(Fatigue_3, levels = c("High Fatigue", "Moderately Fatigue", "Low Fatigue")))
+
+## Combine 5 Stress levels to 3 levels
+Survey_cleaned <- Survey_cleaned %>%
+  mutate(Stress_3 = case_when(
+    Stress %in% c("Very High", "High") ~ "High Stress",
+    Stress %in% c("Moderate") ~ "Moderately Stress",
+    Stress %in% c("Low", "Very Low") ~ "Low Stress"),
+    Stress_3 = factor(Stress_3, levels = c("High Stress", "Moderately Stress", "Low Stress")))
+
+## Combine 10 Noise levels to 3 levels
+Survey_cleaned <- Survey_cleaned %>% 
+  mutate(Noise_Level = case_when(
+    NoiseLevel %in% c(1,2,3) ~ "Low Noise",
+    NoiseLevel %in% c(4,5,6,7) ~ "Moderately Noise",
+    NoiseLevel %in% c(8,9,10) ~ "High Noise"),
+    Noise_Level = factor(Noise_Level, levels = c("High Noise", "Moderately Noise", "Low Noise")))
+
+## Combine 6 VideoGamePlay levels to 2 levels
+Survey_cleaned <- Survey_cleaned %>%
+  mutate(Game_Frequency = case_when(
+    VideoGamePlay %in% c("Daily", "Several times a week", "Once a week") ~ "High Frequency",
+    VideoGamePlay %in% c("Several times a month", "Rarely", "Never") ~ "Low Frequency"),
+    Game_Frequency = factor(Game_Frequency, levels = c("High Frequency", "Low Frequency")))
+
+## Combine 6 SportsPlay levels to 2 levels
+Survey_cleaned <- Survey_cleaned %>%
+  mutate(Sports_Frequency = case_when(
+    SportsPlay %in% c("Daily", "Several times a week", "Once a week") ~ "High Frequency",
+    SportsPlay %in% c("Several times a month", "Rarely", "Never") ~ "Low Frequency"),
+    Sports_Frequency = factor(Sports_Frequency, levels = c("High Frequency", "Low Frequency")))
+
+## Combine 5 ShootingGames levels to 3 levels
+Survey_cleaned <- Survey_cleaned %>%
+  mutate(Shooting_Levels = case_when(
+    ShootingGames %in% c("Expert", "Advanced") ~ "High Levels",
+    ShootingGames %in% c("Intermediate") ~ "Intermediate Levels",
+    ShootingGames %in% c("Beginner", "None") ~ "Low Levels"),
+    Shooting_Levels = factor(Shooting_Levels, levels = c("High Levels", 
+                                                         "Intermediate Levels", "Low Levels")))
+
+Survey_cleaned <- separate(Survey_cleaned, col = DeviceOS, into = c("Device", "OS"), sep = "-")
+
+## Combine IOS and MacOS as Apple
+Survey_cleaned <- Survey_cleaned %>% 
+  mutate(System = case_when(
+    OS %in% c("IOS)", "macOS") ~ "Apple",
+    OS %in% "Windows" ~ "Windows",
+    OS %in% "Linux" ~ "Linux"),
+    System = factor(System))
+
+## Transformation
+Survey_cleaned$logAvgHoursExercise <- log(Survey_cleaned$AvgHoursExercise + 1)
+
+## Remove not informative/used columns
+Survey_cleaned <- Survey_cleaned %>% 
+  dplyr::select(-First) %>% 
+  dplyr::select(-Second) %>% 
+  dplyr::select(-Third) %>% 
+  dplyr::select(-Fatigue) %>% 
+  dplyr::select(-NoiseLevel) %>% 
+  dplyr::select(-VideoGamePlay) %>% 
+  dplyr::select(-SportsPlay) %>% 
+  dplyr::select(-Stress) %>% 
+  dplyr::select(-OS) %>% 
+  dplyr::select(-ShootingGames) %>% 
+  dplyr::select(-AvgHoursExercise)
+```
+
+```{r}
+# Fit the full model
+full_model <- lm(avg_time ~ ., data = Survey_cleaned)
+summary(full_model)
+
+# Variable Selection
+## Searching methods AIC stepwise
+step(full_model, direction = "both")
+
+## Searching methods BIC stepwise
+step(full_model, direction = "both", k = log(129))
+
+## Lasso
+modlasso <- glmnet(model.matrix(avg_time ~ . -avg_time, data = Survey_cleaned), 
+                   Survey_cleaned$avg_time, alpha = 1)
+plot(modlasso, label = TRUE)
+cvmodlasso <- cv.glmnet(model.matrix(avg_time ~ . -avg_time, data = Survey_cleaned), 
+                        Survey_cleaned$avg_time, alpha = 1)
+plot(cvmodlasso)
+bestlamlasso <- cvmodlasso$lambda.min
+predict(modlasso, s = bestlamlasso, type = "coefficients")
+lasso.coef <- round(predict(modlasso, s=bestlamlasso, type = "coefficients")[1:49,],2)
+
+## Ridge
+modridge <- glmnet(model.matrix(avg_time ~ . -avg_time, data = Survey_cleaned), 
+                   Survey_cleaned$avg_time, alpha = 0)
+plot(modridge, label = TRUE)
+cvmodridge <- cv.glmnet(model.matrix(avg_time ~ . -avg_time, data = Survey_cleaned), 
+                        Survey_cleaned$avg_time, alpha = 0)
+plot(cvmodridge)
+bestlamridge <- cvmodridge$lambda.min
+predict(modridge, s = bestlamridge, type = "coefficients")
+ridge.coef <- round(predict(modridge, s=bestlamridge, type = "coefficients")[1:49,],2)
+```
+
+```{r}
+# Model with AIC
+AICmod <- lm(avg_time ~ Class + AvgSleepTime + CaffeinIntake + VisualAcuity + 
+               PrimarilyHand + UsePrimaryHand + InputDevice + RefreshRate + Device + WiFi +
+               Fatigue_3 + Stress_3 + Game_Frequency, data = Survey_cleaned)
+summary(AICmod)
+
+## Collinearity -- VIF only because we include categorical variables
+vif(AICmod)
+
+## Remove InputDevice due to the high VIF
+AICmod2 <- lm(avg_time ~ Class + AvgSleepTime + CaffeinIntake + VisualAcuity +
+               UsePrimaryHand + RefreshRate + Device + WiFi + Fatigue_3 + Stress_3 +
+               Game_Frequency + AvgSleepTime:Class + AvgSleepTime:CaffeinIntake +
+                AvgSleepTime:VisualAcuity + AvgSleepTime:PrimarilyHand + 
+                AvgSleepTime:UsePrimaryHand + AvgSleepTime:RefreshRate + AvgSleepTime:Device +
+                AvgSleepTime:WiFi + AvgSleepTime:Fatigue_3 + AvgSleepTime:Stress_3 +
+                AvgSleepTime:Game_Frequency,
+              data = Survey_cleaned)
+anova(AICmod2)
+AICmod3 <- lm(avg_time ~ Class + AvgSleepTime + CaffeinIntake + VisualAcuity +
+               UsePrimaryHand  + RefreshRate + Device + WiFi + Fatigue_3 + Stress_3 +
+               Game_Frequency, data = Survey_cleaned)
+anova(AICmod3)
+AICmod4 <- lm(avg_time ~ Class + AvgSleepTime + CaffeinIntake + VisualAcuity  + RefreshRate + 
+                Device + Fatigue_3 + Game_Frequency + UsePrimaryHand, data = Survey_cleaned)
+anova(AICmod4)
+```
+
+```{r}
+# Model with BIC
+BICmod <- lm(avg_time ~ Age + AvgSleepTime + InputDevice + Shooting_Levels +
+               Distraction, data = Survey_cleaned)
+
+## Collinearity -- VIF only because we include categorical variables
+vif(BICmod)
+summary(BICmod)
+
+## Remove InputDevice due to high VIF
+BICmod2 <- lm(avg_time ~ Age + AvgSleepTime + Shooting_Levels +
+               Distraction + Age:Shooting_Levels + Age:Distraction + AvgSleepTime:Shooting_Levels +
+                AvgSleepTime:Distraction, data = Survey_cleaned)
+anova(BICmod2)
+BICmod3 <- lm(avg_time ~ Age + AvgSleepTime + Shooting_Levels +
+               Distraction + Age:Shooting_Levels, data = Survey_cleaned)
+anova(BICmod3)
+```
+
+```{r}
+# Lasso prediction
+X_new <- model.matrix(~ . - avg_time, data = Survey_cleaned)
+predlasso <- predict(modlasso, newx = X_new, s = bestlamlasso)
+```
+
+```{r}
+# Ridge prediction
+predridge <- predict(modridge, newx = X_new, s = bestlamridge)
+```
+
+```{r}
+# Model Diagnostics AIC
+par(mfrow = c(2,2))
+plot(AICmod4)
+par(mfrow = c(1,1))
+bptest(AICmod4)
+shapiro.test(residuals(AICmod4))
+dwtest(AICmod4)
+```
+
+```{r}
+# Model Diagnostics BIC
+par(mfrow = c(2,2))
+plot(BICmod3)
+par(mfrow = c(1,1))
+bptest(BICmod3)
+shapiro.test(residuals(BICmod3))
+dwtest(BICmod3)
+
+## WLS -- Non-constant variance Issue
+Shooting_Levels_freq <- table(Survey_cleaned$Shooting_Levels) / nrow(Survey_cleaned)
+Survey_cleaned$Shooting_Levels_weight <- Shooting_Levels_freq[Survey_cleaned$Shooting_Levels]
+BICmod3_weighted <- lm(avg_time ~ Age + AvgSleepTime + Shooting_Levels +
+                       Distraction + Age:Shooting_Levels, 
+                       data = Survey_cleaned, weights = Shooting_Levels_weight)
+bptest(BICmod3_weighted)
+shapiro.test(residuals(BICmod3_weighted))
+```
+
+```{r}
+# Check models accuracy
+## Define rmse function
+rmse <- function(x,y) sqrt(mean((x - y)^2))
+
+## AIC model
+rmse(predict(AICmod4), Survey_cleaned$avg_time)
+fitted_AIC <- data.frame(
+  actual = Survey_cleaned$avg_time,
+  predicted = predict(AICmod4)
+)
+fitted_AIC %>% ggplot(aes(x = actual, y = predicted)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  theme_bw()
+
+## BIC model
+rmse(predict(BICmod3_weighted), Survey_cleaned$avg_time)
+fitted_BIC <- data.frame(
+  actual = Survey_cleaned$avg_time,
+  predicted = predict(BICmod3)
+)
+fitted_BIC %>% ggplot(aes(x = actual, y = predicted)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  theme_bw()
+
+## Lasso model
+rmse(predlasso, Survey_cleaned$avg_time)
+fitted_Lasso <- data.frame(
+  actual = Survey_cleaned$avg_time,
+  predicted = predlasso
+)
+fitted_Lasso %>% ggplot(aes(x = actual, y = s1)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  theme_bw()
+
+# Ridge model
+rmse(predridge, Survey_cleaned$avg_time)
+fitted_Ridge <- data.frame(
+  actual = Survey_cleaned$avg_time,
+  predicted = predridge
+)
+fitted_Ridge %>% ggplot(aes(x = actual, y = s1)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  theme_bw()
+```
+
+
+
+
+
+
+
+
