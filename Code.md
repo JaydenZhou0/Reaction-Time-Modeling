@@ -1,4 +1,4 @@
-Final Project
+Code
 ================
 
 # Predict the average reaction time through the variables we get from the survey
