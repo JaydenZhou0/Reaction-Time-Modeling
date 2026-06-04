@@ -2,6 +2,10 @@
 
 A statistical modeling project investigating factors that influence reaction time using survey-based behavioral data.
 
+## Full Report
+
+[View the Full Report](Report.pdf)
+
 ## Overview
 
 This project explores how demographic, behavioral, psychological, and environmental variables relate to human reaction time.
@@ -27,10 +31,6 @@ The project includes exploratory data analysis, feature engineering, diagnostic 
 ## Main Findings
 
 Ridge regression achieved the best predictive performance by effectively handling multicollinearity while retaining informative predictors.
-
-## Full Report
-
-[View the Full Report](Report.pdf)
 
 ## Tools
 - R
