@@ -33,12 +33,12 @@ Ridge regression achieved the best predictive performance by effectively handlin
 [View the Full Report](Report.pdf)
 
 ## Tools
-R
-glmnet
-ggplot2
-tidyverse
-MASS
+- R
+- glmnet
+- ggplot2
+- tidyverse
+- MASS
 
 ## Authors
-Zihao Lian
-Jayden Zhou
+- Zihao Lian
+- Jayden Zhou
